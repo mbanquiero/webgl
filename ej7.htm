@@ -1,0 +1,356 @@
+
+
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+<title>Video juegos UADE </title>
+
+
+<script type="text/javascript" src="glMatrix-0.9.5.min.js"></script>
+
+<script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+	varying vec4 vColor;
+	varying vec3 vNormal;
+    void main(void) {
+        gl_FragColor = vec4(normalize(vNormal),1.0);
+    }
+</script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+	attribute vec4 aVertexColor;
+	
+    uniform mat4 matWorld;
+    uniform mat4 matView;
+    uniform mat4 matProj;
+
+	varying vec4 vColor;
+	varying vec3 vNormal;
+    void main(void) {
+        gl_Position = matProj * matView * matWorld * vec4(aVertexPosition, 1.0);
+		vColor = aVertexColor;
+		vNormal = aVertexNormal;
+    }
+</script>
+
+
+<script type="text/javascript">
+
+
+	(function() {
+	var requestAnimationFrame = window.requestAnimationFrame || window.mozRequestAnimationFrame ||
+                              window.webkitRequestAnimationFrame || window.msRequestAnimationFrame;
+	window.requestAnimationFrame = requestAnimationFrame;
+	})();
+	
+
+
+	function makeLookAt(cameraPosition, target, up, matView) {
+	var xAxis = vec3.create();
+	var yAxis = vec3.create();
+	var zAxis = vec3.create();
+	
+	vec3.subtract(cameraPosition, target,zAxis)
+	vec3.normalize(zAxis);
+	vec3.cross(up, zAxis,xAxis);
+	vec3.normalize(xAxis);
+	vec3.cross(zAxis, xAxis,yAxis);
+
+	var tx = vec3.dot(xAxis,cameraPosition);
+	var ty = vec3.dot(yAxis,cameraPosition);
+	var tz = vec3.dot(zAxis,cameraPosition);
+
+	return [
+			xAxis[0] , yAxis[0] , zAxis[0] , 0 , 
+			xAxis[1] , yAxis[1] , zAxis[1] , 0 , 
+			xAxis[2] , yAxis[2] , zAxis[2] , 0 , 
+			-tx 	 ,		-ty ,	    -tz, 1
+			]
+		
+	}
+	
+    var gl;
+    function initGL(canvas) {
+        try {
+			gl = canvas.getContext("webgl", 
+                 { antialias: false,
+                   depth: true });            
+		    gl.viewportWidth = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } catch (e) {
+        }
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(");
+        }
+    }
+
+
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var str = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                str += k.textContent;
+            }
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+
+        gl.shaderSource(shader, str);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+
+    var shaderProgram;
+
+    function initShaders() {
+        var fragmentShader = getShader(gl, "shader-fs");
+        var vertexShader = getShader(gl, "shader-vs");
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+		
+		shaderProgram.vertexColorAttribute = gl.getAttribLocation(shaderProgram, "aVertexColor");
+		gl.enableVertexAttribArray(shaderProgram.vertexColorAttribute);		
+    }
+
+
+    var matView = mat4.create();
+    var matWorld = mat4.create();
+    var matProj = mat4.create();
+
+    function setMatrixUniforms() {
+        gl.uniformMatrix4fv(gl.getUniformLocation(shaderProgram, "matWorld"), false, matWorld);
+        gl.uniformMatrix4fv(gl.getUniformLocation(shaderProgram, "matView"), false, matView);
+        gl.uniformMatrix4fv(gl.getUniformLocation(shaderProgram, "matProj"), false, matProj);
+    }
+
+
+	var vertexPositionBuffer;
+	var vertexNormalBuffer;
+	var vertexColorBuffer;
+
+    function HeighMap(x,y) {
+		return 2*Math.sin(0.5*x) + 1*Math.cos(y);
+	}
+
+	function HeighMapNormal(x,y){
+		var ep = 0.1;
+		
+		var z = HeighMap(x,y);
+		var zx = HeighMap(x+ep,y);
+		var zy = HeighMap(x,y+ep);
+		
+		var fx = [ep , 0, zx-z];
+		var fy = [0 , ep, zy-z];
+		var N = vec3.create();
+		vec3.cross(fx,fy,N);
+		vec3.normalize(N);
+		return N;
+	}
+	
+    function initBuffers() {
+	
+		var t = 0;
+		var n = 0;
+        var vertices = [];
+        var normales = [];
+		var colors = [];
+		var cant_v = 0;
+		
+		var dx = 1;
+		var dy = 1;
+		for(var x=-10;x<10;x+=dx)
+		for(var y=-10;y<10;y+=dy)
+		{
+			var x0 = x;
+			var y0 = y;
+			var z0 = HeighMap(x0,y0);
+			var N0 = HeighMapNormal(x0,y0);
+
+			var x1 = x + dx;
+			var y1 = y;
+			var z1 = HeighMap(x1,y1);
+			var N1 = HeighMapNormal(x1,y1);
+			
+			var x2 = x;
+			var y2 = y + dy;
+			var z2 = HeighMap(x2,y2);
+			var N2 = HeighMapNormal(x2,y2);
+			
+			var x3 = x + dx;
+			var y3 = y + dy;
+			var z3 = HeighMap(x3,y3);
+			var N3 = HeighMapNormal(x3,y3);
+			
+			
+			vertices[t++] = x0;
+			vertices[t++] = z0;
+			vertices[t++] = y0;
+			normales[n++] = N0[0];			// N.x
+			normales[n++] = N0[2];			// N.z
+			normales[n++] = N0[1];			// N.y
+			
+			
+			vertices[t++] = x1;
+			vertices[t++] = z1;
+			vertices[t++] = y1;
+			normales[n++] = N1[0];			// N.x
+			normales[n++] = N1[2];			// N.z
+			normales[n++] = N1[1];			// N.y
+
+			vertices[t++] = x2;
+			vertices[t++] = z2;
+			vertices[t++] = y2;
+			normales[n++] = N2[0];			// N.x
+			normales[n++] = N2[2];			// N.z
+			normales[n++] = N2[1];			// N.y
+			
+
+			vertices[t++] = x1;
+			vertices[t++] = z1;
+			vertices[t++] = y1;
+			normales[n++] = N1[0];			// N.x
+			normales[n++] = N1[2];			// N.z
+			normales[n++] = N1[1];			// N.y
+
+			vertices[t++] = x2;
+			vertices[t++] = z2;
+			vertices[t++] = y2;
+			normales[n++] = N2[0];			// N.x
+			normales[n++] = N2[2];			// N.z
+			normales[n++] = N2[1];			// N.y
+
+			vertices[t++] = x3;
+			vertices[t++] = z3;
+			vertices[t++] = y3;
+			normales[n++] = N3[0];			// N.x
+			normales[n++] = N3[2];			// N.z
+			normales[n++] = N3[1];			// N.y
+
+			cant_v+=6;
+		}
+		
+		for(var i=0;i<t;i++)
+		{
+			colors[4*i] = 1;
+			colors[4*i+1] = 0;
+			colors[4*i+2] = 1;
+			colors[4*i+3] = 1;
+		}
+
+        vertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+        vertexPositionBuffer.itemSize = 3;
+        vertexPositionBuffer.numItems = cant_v;
+
+        vertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normales), gl.STATIC_DRAW);
+        vertexNormalBuffer.itemSize = 3;
+        vertexNormalBuffer.numItems = cant_v;
+		
+        vertexColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexColorBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
+		vertexColorBuffer.itemSize = 4;
+		vertexColorBuffer.numItems = cant_v;		
+    }
+
+
+	var angle = 0;
+    function render(elapsed_time) {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 1.0, 300.0, matProj);
+        mat4.identity(matWorld);
+		
+		angle += elapsed_time*0.0001;
+		
+		var vLookFrom = [10*Math.cos(angle), 10, 10*Math.sin(angle)];
+		var vLookAt = [0, 0, 0];
+		
+        matView = makeLookAt(vLookFrom, vLookAt, [0,1,0]);
+		
+		gl.bindBuffer(gl.ARRAY_BUFFER, vertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, vertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		gl.bindBuffer(gl.ARRAY_BUFFER, vertexNormalBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, vertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+  
+		gl.bindBuffer(gl.ARRAY_BUFFER, vertexColorBuffer);
+		gl.vertexAttribPointer(shaderProgram.vertexColorAttribute, vertexColorBuffer.itemSize, gl.FLOAT, false, 0, 0);		
+		
+        setMatrixUniforms();
+        gl.drawArrays(gl.TRIANGLES, 0, vertexPositionBuffer.numItems);
+
+    }
+
+
+	var lastTime = 0;
+	function RenderLoop()
+	{
+		requestAnimationFrame(RenderLoop);
+		var timeNow = new Date().getTime();
+		if (lastTime != 0) {
+			var elapsed = timeNow - lastTime;
+			render(elapsed);
+		}
+		lastTime = timeNow;
+	 }
+	
+
+    function webGLStart() {
+        var canvas = document.getElementById("canvas");
+        initGL(canvas);
+        initShaders();
+        initBuffers();
+		gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+        RenderLoop();
+    }
+</script>
+
+</head>
+
+
+<body onload="webGLStart();">
+    <canvas id="canvas" style="border: none;" width="1000" height="700"></canvas>
+</body>
+</html>

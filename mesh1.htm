@@ -1,0 +1,477 @@
+
+
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=ISO-8859-1">
+<title>Video juegos UADE </title>
+
+
+<script type="text/javascript" src="glMatrix-0.9.5.min.js"></script>
+<script type="text/javascript" src="media/Warthog.js"></script>
+<script type="text/javascript" src="media/3.js"></script>
+<script type="text/javascript" src="media/6.js"></script>
+<script type="text/javascript" src="media/7.js"></script>
+
+<script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+	varying vec4 vColor;
+	varying vec3 vNormal;
+	varying vec2 vTexCoords;
+	varying vec3 vPos;
+    uniform vec3 vEye;
+	uniform sampler2D uSampler;	
+	
+    void main(void) {
+	
+		vec3 color_base = texture2D(uSampler, vec2(vTexCoords.s, 1.0-vTexCoords.t)).rgb;
+        gl_FragColor.rgb = color_base;
+		gl_FragColor.a = 1.0;
+		
+		/*
+		// luz diffuse
+		vec3 LightPos = vec3(0.0,10.0,0.0);
+		vec3 N = normalize(vNormal);
+		vec3 L = normalize(LightPos - vPos);
+		float kd = clamp(dot(vNormal,L) *0.7 , 0.0 , 1.0);
+		vec3 diffuse = color_base * kd;
+		
+		// luz specular
+		vec3 D = normalize(vPos-vEye);
+		float ks = clamp(dot(reflect(L,N), D) , 0.0 , 1.0);
+		ks = pow(ks ,5.0);
+		vec3 specular = vec3(1.0 , 1.0 , 1.0) * ks;
+		// luz ambiente
+		vec3 ambient = vec3(1.0 , 1.0 , 1.0) * 0.2;
+		
+        gl_FragColor.rgb = clamp(diffuse + specular + ambient , 0.0 , 1.0);
+		gl_FragColor.a = 1.0;
+		*/
+
+    }
+</script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+    attribute vec2 aVertexTexCoords;
+	
+    uniform mat4 matWorld;
+    uniform mat4 matView;
+    uniform mat4 matProj;
+
+	varying vec4 vColor;
+	varying vec3 vNormal;
+	varying vec3 vPos;
+	varying vec2 vTexCoords;
+
+	uniform float time;
+	
+    void main(void) {
+		
+		vec4 ws_pos = matWorld * vec4(aVertexPosition , 1.0);
+		vec4 ws_normal = matWorld * vec4(aVertexNormal , 1.0);
+        gl_Position = matProj * matView * ws_pos;
+		vColor = vec4(1.0,0.0,1.0,1.0);
+		vNormal = ws_normal.xyz;
+		vPos = -ws_pos.xyz;
+		vTexCoords = aVertexTexCoords;
+    }
+</script>
+
+
+<script type="text/javascript">
+
+
+	(function() {
+	var requestAnimationFrame = window.requestAnimationFrame || window.mozRequestAnimationFrame ||
+                              window.webkitRequestAnimationFrame || window.msRequestAnimationFrame;
+	window.requestAnimationFrame = requestAnimationFrame;
+	})();
+	
+
+// Eventos
+var EV_NADA				= 0;
+var EV_PAN_REALTIME		= 1;
+var EV_3D_REALTIME		= 2;
+var eventoInterno = EV_NADA;
+var mouse_x = 0;
+var mouse_y = 0;
+
+	function makeLookAt(cameraPosition, target, up, matView) {
+	var xAxis = vec3.create();
+	var yAxis = vec3.create();
+	var zAxis = vec3.create();
+	
+	vec3.subtract(cameraPosition, target,zAxis)
+	vec3.normalize(zAxis);
+	vec3.cross(up, zAxis,xAxis);
+	vec3.normalize(xAxis);
+	vec3.cross(zAxis, xAxis,yAxis);
+
+	var tx = vec3.dot(xAxis,cameraPosition);
+	var ty = vec3.dot(yAxis,cameraPosition);
+	var tz = vec3.dot(zAxis,cameraPosition);
+
+	return [
+			xAxis[0] , yAxis[0] , zAxis[0] , 0 , 
+			xAxis[1] , yAxis[1] , zAxis[1] , 0 , 
+			xAxis[2] , yAxis[2] , zAxis[2] , 0 , 
+			-tx 	 ,		-ty ,	    -tz, 1
+			]
+		
+	}
+	
+    var gl;
+    function initGL(canvas) {
+        try {
+			gl = canvas.getContext("webgl", 
+                 { antialias: false,
+                   depth: true });            
+		    gl.viewportWidth = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } catch (e) {
+        }
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(");
+        }
+    }
+
+
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var str = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                str += k.textContent;
+            }
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+
+        gl.shaderSource(shader, str);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+
+    var shaderProgram;
+
+    function initShaders() {
+        var fragmentShader = getShader(gl, "shader-fs");
+        var vertexShader = getShader(gl, "shader-vs");
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+		
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+
+        shaderProgram.vertexTexCoordsAttribute = gl.getAttribLocation(shaderProgram, "aVertexTexCoords");
+        gl.enableVertexAttribArray(shaderProgram.vertexTexCoordsAttribute);
+		
+		
+		
+    }
+
+
+    var matView = mat4.create();
+    var matWorld = mat4.create();
+    var matProj = mat4.create();
+
+    function setMatrixUniforms() {
+        gl.uniformMatrix4fv(gl.getUniformLocation(shaderProgram, "matWorld"), false, matWorld);
+        gl.uniformMatrix4fv(gl.getUniformLocation(shaderProgram, "matView"), false, matView);
+        gl.uniformMatrix4fv(gl.getUniformLocation(shaderProgram, "matProj"), false, matProj);
+    }
+
+
+	var vertexPositionBuffer;
+	var vertexNormalBuffer;
+	var vertexTexCoordsBuffer;
+
+	
+    function initBuffers() {
+	
+
+        vertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertex_Warthog), gl.STATIC_DRAW);
+        vertexPositionBuffer.itemSize = 3;
+        vertexPositionBuffer.numItems = vertex_Warthog.length / 3;
+		
+        vertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexNormalBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normal_Warthog), gl.STATIC_DRAW);
+        vertexNormalBuffer.itemSize = 3;
+        vertexNormalBuffer.numItems = normal_Warthog.length / 3;
+		
+        vertexTexCoordsBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexTexCoordsBuffer);
+		gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(tx_Warthog), gl.STATIC_DRAW);
+		vertexTexCoordsBuffer.itemSize = 2;
+        vertexTexCoordsBuffer.numItems = tx_Warthog.length / 2;
+		
+    }
+
+	var texture = [];
+
+	function textureFromPixelArray(gl, dataTypedArray, width, height) {
+		var tx = gl.createTexture();
+		gl.bindTexture(gl.TEXTURE_2D, tx);
+		gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, width, height, 0, gl.RGB, gl.UNSIGNED_BYTE, dataTypedArray);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+		gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);	
+		return tx;
+	}	
+	
+	function initTextureFromData(uInt8Array) {
+	
+		var dataTypedArray = new Uint8Array(512*512*3);
+		var t = 54;
+		var s = 0;
+		for(var j=0;j<512;++j)
+		for(var i=0;i<512;++i)
+		{
+			var R = uInt8Array[t++];
+			var G = uInt8Array[t++];
+			var B = uInt8Array[t++];
+			dataTypedArray[s++] = B;
+			dataTypedArray[s++] = G;
+			dataTypedArray[s++] = R;
+		}
+		return textureFromPixelArray(gl,dataTypedArray,512,512);
+	}	
+	
+	function initTextures()
+	{
+		for(var i=0;i<subset_Warthog.length;++i)
+			texture[i] = null;
+			
+		texture[1] = initTextureFromData(bmp_3_data);
+		texture[3] = initTextureFromData(bmp_6_data);
+		texture[9] = initTextureFromData(bmp_7_data);
+	
+	}
+
+
+	var time = 0;
+	var vLookFrom = [320, 220, 220];
+	var vLookAt = [0, 0, 0];
+
+    function render(elapsed_time) {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 1.0, 3000.0, matProj);
+        mat4.identity(matWorld);
+		
+		time += elapsed_time;
+		
+        gl.uniform3fv(gl.getUniformLocation(shaderProgram, "vEye"), vLookFrom);
+        gl.uniform1f(gl.getUniformLocation(shaderProgram, "time"), time);
+		
+        matView = makeLookAt(vLookFrom, vLookAt, [0,1,0]);
+		
+		gl.bindBuffer(gl.ARRAY_BUFFER, vertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, vertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		gl.bindBuffer(gl.ARRAY_BUFFER, vertexNormalBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, vertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+		gl.bindBuffer(gl.ARRAY_BUFFER, vertexTexCoordsBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexTexCoordsAttribute, vertexTexCoordsBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        setMatrixUniforms();
+		
+		var pos = 0;
+		for(var i=0;i<subset_Warthog.length;i++)
+		{
+			var cant_items = subset_Warthog[i];
+			if(cant_items>0)
+			{
+				gl.bindTexture(gl.TEXTURE_2D, texture[i]);
+				gl.drawArrays(gl.TRIANGLES, pos, cant_items);
+				pos += cant_items;
+			}
+		}
+
+    }
+
+
+	var lastTime = 0;
+	function RenderLoop()
+	{
+		requestAnimationFrame(RenderLoop);
+		var timeNow = new Date().getTime();
+		if (lastTime != 0) {
+			var elapsed = timeNow - lastTime;
+			render(elapsed);
+		}
+		lastTime = timeNow;
+	 }
+	
+	
+function onMouseMove() 
+{
+	var xPos = window.event.offsetX;
+	var yPos = window.event.offsetY;
+
+	switch (eventoInterno) {
+	    case EV_3D_REALTIME:
+			var dx = xPos - mouse_x;
+			var dy = yPos - mouse_y;
+			vLookFrom[1] += dy;
+			var x = vLookFrom[0];
+			var z = vLookFrom[2];
+			var an = dx / 800 * 3.1415;
+			vLookFrom[0] = x*Math.cos(an) - z*Math.sin(an);
+			vLookFrom[2] = x*Math.sin(an) + z*Math.cos(an);
+	        break;
+
+	    case EV_PAN_REALTIME:
+			var dx = xPos - mouse_x;
+			var dy = yPos - mouse_y;
+			var xAxis = vec3.create();
+			var yAxis = vec3.create();
+			var zAxis = vec3.create();
+			vec3.subtract(vLookFrom, vLookAt,zAxis)
+			vec3.normalize(zAxis);
+			vec3.cross([0,1,0], zAxis,xAxis);
+			vec3.normalize(xAxis);
+			vec3.cross(zAxis, xAxis,yAxis);
+			var k = 0.5;
+			var desf_x = -xAxis[0]*dx*k + yAxis[0]*dy*k;
+			var desf_y = -xAxis[1]*dx*k + yAxis[1]*dy*k;
+			var desf_z = -xAxis[2]*dx*k + yAxis[2]*dy*k;
+			vLookFrom[0] += desf_x;
+			vLookFrom[1] += desf_y;
+			vLookFrom[2] += desf_z;
+			vLookAt[0] += desf_x;
+			vLookAt[1] += desf_y;
+			vLookAt[2] += desf_z;
+			
+	        break;
+			
+	}
+
+    // actualizo la posicion del mouse
+	mouse_x = xPos;
+	mouse_y = yPos;
+}
+
+function onMouseDown(e) {
+    e = e || window.event;
+    switch (e.which)
+    {
+        case 1:
+            // Left button
+            // WM_LBUTTONDOWN
+            mouse_x = window.event.offsetX;
+            mouse_y = window.event.offsetY;
+			eventoInterno = EV_3D_REALTIME;
+            break;
+        case 2:
+            mouse_x = window.event.offsetX;
+            mouse_y = window.event.offsetY;
+			eventoInterno = EV_PAN_REALTIME;
+            break;
+        case 3:
+            // right button
+            break;
+    }
+}
+
+
+function onMouseUp(e) {
+    e = e || window.event;
+    switch (e.which) {
+        case 1:
+            // Left button
+            // WM_LBUTTONUP
+            eventoInterno = EV_NADA;
+            break;
+        case 2:
+            // middle button
+            // WM_MBUTTONUP
+            // termino event de pan realtime
+            eventoInterno = EV_NADA;
+            break;
+        case 3:
+            // right button
+            break;
+    }
+}
+
+
+function onMouseWheel(e) {
+
+    var delta = e.wheelDelta;
+    // ajusto la escala
+	var viewdir = vec3.create();
+	vec3.subtract(vLookFrom,vLookAt,viewdir)
+	var dist = vec3.length(viewdir);
+	vec3.normalize(viewdir)
+	if(delta>0)
+		dist *= 0.9;
+	else
+		dist *= 1.1;
+	vLookFrom[0] = vLookAt[0] + viewdir[0]*dist; 
+	vLookFrom[1] = vLookAt[1] + viewdir[1]*dist; 
+	vLookFrom[2] = vLookAt[2] + viewdir[2]*dist; 
+}
+
+	
+
+    function webGLStart() {
+		
+		document.addEventListener("mousemove", onMouseMove, true);
+		document.addEventListener("mousedown", onMouseDown, true);
+		document.addEventListener("mouseup", onMouseUp, true);
+		document.addEventListener("mousewheel", onMouseWheel, true);
+
+        var canvas = document.getElementById("canvas");
+        initGL(canvas);
+        initShaders();
+        initBuffers();
+		initTextures();
+		gl.clearColor(0.5, 0.5, 0.5, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+        RenderLoop();
+    }
+</script>
+
+</head>
+
+
+<body onload="webGLStart();">
+    <canvas id="canvas" style="border: none;" width="1000" height="700"></canvas>
+</body>
+</html>
